@@ -165,16 +165,34 @@ const QuickOrderForm: React.FC<{
             />
           </div>
         </div>
-        <div className="space-y-2">
-          <label className="text-[10px] uppercase tracking-widest text-gray-500">Quantité</label>
-          <input 
-            type="number" 
-            min="1"
-            required
-            value={quantity}
-            onChange={e => setQuantity(parseInt(e.target.value) || 1)}
-            className="w-full bg-black border border-white/10 p-3 text-sm focus:border-[#C9A227] outline-none transition-colors"
-          />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between py-6 border-y border-white/5">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-gray-400 font-bold">Quantité</span>
+            <div className="flex items-center gap-8">
+              <button 
+                type="button"
+                onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                className="w-10 h-10 border border-white/10 flex items-center justify-center hover:border-[#C9A227] transition-colors rounded-md text-white"
+              >
+                -
+              </button>
+              <span className="text-xl font-mono w-6 text-center text-white">{quantity}</span>
+              <button 
+                type="button"
+                onClick={() => setQuantity(quantity + 1)}
+                className="w-10 h-10 border border-white/10 flex items-center justify-center hover:border-[#C9A227] transition-colors rounded-md text-white"
+              >
+                +
+              </button>
+            </div>
+          </div>
+          
+          <div className="flex justify-between items-center py-2">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-gray-500 font-bold">Total à payer:</span>
+            <span className="text-2xl font-mono text-[#C9A227] font-bold">
+              {formatPrice((parseFloat(String(product.prix_base)) + (selectedVariante ? parseFloat(String(selectedVariante.prix_supp)) : 0)) * quantity)}
+            </span>
+          </div>
         </div>
         <button 
           disabled={submitting}
@@ -298,7 +316,9 @@ const ProductDetail: React.FC = () => {
     </div>
   );
 
-  const currentPrice = product.prix_base + (selectedVariante?.prix_supp || 0);
+  const basePrice = typeof product.prix_base === 'string' ? parseFloat(product.prix_base) : (product.prix_base || 0);
+  const variantPrice = selectedVariante ? (typeof selectedVariante.prix_supp === 'string' ? parseFloat(selectedVariante.prix_supp) : (selectedVariante.prix_supp || 0)) : 0;
+  const currentPrice = basePrice + variantPrice;
 
   return (
     <div className="bg-[#050505] min-h-screen pt-32 pb-24 text-white">

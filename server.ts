@@ -306,9 +306,9 @@ async function startServer() {
   });
 
   app.post("/api/products", authenticateToken, async (req, res) => {
-    const { nom, slug, description, prix_base, categorie_id, images_base64, sections, texte_alignement } = req.body;
+    const { nom, slug, description, prix_base, categorie_id, images_base64, images_urls: existing_urls, sections, texte_alignement } = req.body;
     try {
-      let images_urls: string[] = [];
+      let images_urls: string[] = Array.isArray(existing_urls) ? existing_urls : [];
       if (images_base64 && Array.isArray(images_base64)) {
         for (const base64 of images_base64) {
           const uploadRes = await cloudinary.uploader.upload(base64, { folder: "luxe_and_co/products" });
@@ -414,8 +414,23 @@ async function startServer() {
       // Calcul des totaux
       let total_ht = 0;
       for (const item of items) {
-        const varRes = await pool.query("SELECT prix_supplementaire, (SELECT prix_base FROM produits WHERE id = produit_id) as base FROM variantes_produits WHERE id = $1", [item.variante_id]);
-        const prix = parseFloat(varRes.rows[0].base) + parseFloat(varRes.rows[0].prix_supplementaire);
+        let prix = 0;
+        if (item.variante_id && item.variante_id !== 0) {
+          const varRes = await client.query(`
+            SELECT vp.prix_supplementaire, p.prix_base 
+            FROM variantes_produits vp 
+            JOIN produits p ON vp.produit_id = p.id 
+            WHERE vp.id = $1
+          `, [item.variante_id]);
+          if (varRes.rows.length > 0) {
+            prix = parseFloat(varRes.rows[0].prix_base) + parseFloat(varRes.rows[0].prix_supplementaire);
+          }
+        } else {
+          const prodRes = await client.query("SELECT prix_base FROM produits WHERE id = $1", [item.produit_id]);
+          if (prodRes.rows.length > 0) {
+            prix = parseFloat(prodRes.rows[0].prix_base);
+          }
+        }
         total_ht += prix * item.quantite;
       }
 
@@ -423,7 +438,7 @@ async function startServer() {
       const total_ttc = total_ht;
       const numero_commande = `LC-${Date.now().toString().slice(-6)}`;
 
-      const orderRes = await pool.query(
+      const orderRes = await client.query(
         `INSERT INTO commandes (client_id, zone_livraison_id, code_promo_id, numero_commande, total_ht, total_ttc, frais_livraison, adresse_livraison, ville_livraison, telephone_contact) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
         [req.user.id, zone_livraison_id, code_promo_id, numero_commande, total_ht, total_ttc, frais_livraison, adresse_livraison, ville_livraison, telephone_contact]
@@ -431,11 +446,29 @@ async function startServer() {
 
       const orderId = orderRes.rows[0].id;
       for (const item of items) {
-        const varRes = await pool.query("SELECT prix_supplementaire, (SELECT prix_base FROM produits WHERE id = produit_id) as base FROM variantes_produits WHERE id = $1", [item.variante_id]);
-        const prix_unitaire = parseFloat(varRes.rows[0].base) + parseFloat(varRes.rows[0].prix_supplementaire);
+        let prix_unitaire = 0;
+        let v_id = item.variante_id && item.variante_id !== 0 ? item.variante_id : null;
+
+        if (v_id) {
+          const varRes = await client.query(`
+            SELECT vp.prix_supplementaire, p.prix_base 
+            FROM variantes_produits vp 
+            JOIN produits p ON vp.produit_id = p.id 
+            WHERE vp.id = $1
+          `, [v_id]);
+          if (varRes.rows.length > 0) {
+            prix_unitaire = parseFloat(varRes.rows[0].prix_base) + parseFloat(varRes.rows[0].prix_supplementaire);
+          }
+        } else {
+          const prodRes = await client.query("SELECT prix_base FROM produits WHERE id = $1", [item.produit_id]);
+          if (prodRes.rows.length > 0) {
+            prix_unitaire = parseFloat(prodRes.rows[0].prix_base);
+          }
+        }
+
         await client.query(
-          "INSERT INTO lignes_commande (commande_id, variante_id, quantite, prix_unitaire) VALUES ($1, $2, $3, $4)",
-          [orderId, item.variante_id, item.quantite, prix_unitaire]
+          "INSERT INTO lignes_commande (commande_id, produit_id, variante_id, quantite, prix_unitaire) VALUES ($1, $2, $3, $4, $5)",
+          [orderId, item.produit_id, v_id, item.quantite, prix_unitaire]
         );
       }
 
@@ -460,19 +493,26 @@ async function startServer() {
       let total_ht = 0;
       let first_product_name = "Produit";
       for (const item of items) {
-        const varRes = await pool.query(`
-          SELECT vp.prix_supplementaire, p.prix_base, p.nom 
-          FROM variantes_produits vp 
-          JOIN produits p ON vp.produit_id = p.id 
-          WHERE vp.id = $1
-        `, [item.variante_id]);
-        if (varRes.rows.length > 0) {
-          const prix = parseFloat(varRes.rows[0].prix_base) + parseFloat(varRes.rows[0].prix_supplementaire);
-          total_ht += prix * item.quantite;
-          if (first_product_name === "Produit") {
-            first_product_name = varRes.rows[0].nom;
+        let prix = 0;
+        if (item.variante_id && item.variante_id !== 0) {
+          const varRes = await client.query(`
+            SELECT vp.prix_supplementaire, p.prix_base, p.nom 
+            FROM variantes_produits vp 
+            JOIN produits p ON vp.produit_id = p.id 
+            WHERE vp.id = $1
+          `, [item.variante_id]);
+          if (varRes.rows.length > 0) {
+            prix = parseFloat(varRes.rows[0].prix_base) + parseFloat(varRes.rows[0].prix_supplementaire);
+            if (first_product_name === "Produit") first_product_name = varRes.rows[0].nom;
+          }
+        } else {
+          const prodRes = await client.query("SELECT prix_base, nom FROM produits WHERE id = $1", [item.produit_id]);
+          if (prodRes.rows.length > 0) {
+            prix = parseFloat(prodRes.rows[0].prix_base);
+            if (first_product_name === "Produit") first_product_name = prodRes.rows[0].nom;
           }
         }
+        total_ht += prix * item.quantite;
       }
 
       const frais_livraison = 0;
@@ -487,14 +527,30 @@ async function startServer() {
 
       const orderId = orderRes.rows[0].id;
       for (const item of items) {
-        const varRes = await client.query("SELECT prix_supplementaire, (SELECT prix_base FROM produits WHERE id = produit_id) as base FROM variantes_produits WHERE id = $1", [item.variante_id]);
-        if (varRes.rows.length > 0) {
-          const prix_unitaire = parseFloat(varRes.rows[0].base) + parseFloat(varRes.rows[0].prix_supplementaire);
-          await client.query(
-            "INSERT INTO lignes_commande (commande_id, variante_id, quantite, prix_unitaire) VALUES ($1, $2, $3, $4)",
-            [orderId, item.variante_id, item.quantite, prix_unitaire]
-          );
+        let prix_unitaire = 0;
+        let v_id = item.variante_id && item.variante_id !== 0 ? item.variante_id : null;
+
+        if (v_id) {
+          const varRes = await client.query(`
+            SELECT vp.prix_supplementaire, p.prix_base 
+            FROM variantes_produits vp 
+            JOIN produits p ON vp.produit_id = p.id 
+            WHERE vp.id = $1
+          `, [v_id]);
+          if (varRes.rows.length > 0) {
+            prix_unitaire = parseFloat(varRes.rows[0].prix_base) + parseFloat(varRes.rows[0].prix_supplementaire);
+          }
+        } else {
+          const prodRes = await client.query("SELECT prix_base FROM produits WHERE id = $1", [item.produit_id]);
+          if (prodRes.rows.length > 0) {
+            prix_unitaire = parseFloat(prodRes.rows[0].prix_base);
+          }
         }
+
+        await client.query(
+          "INSERT INTO lignes_commande (commande_id, produit_id, variante_id, quantite, prix_unitaire) VALUES ($1, $2, $3, $4, $5)",
+          [orderId, item.produit_id, v_id, item.quantite, prix_unitaire]
+        );
       }
 
       await client.query("COMMIT");
@@ -548,7 +604,7 @@ async function startServer() {
       const attente = await pool.query("SELECT COUNT(*) FROM commandes WHERE statut = 'en_attente'");
       
       // 4) Livraisons réussies
-      const livrees = await pool.query("SELECT COUNT(*) FROM commandes WHERE statut = 'livrée'");
+      const livrees = await pool.query("SELECT COUNT(*) FROM commandes WHERE statut = 'livree'");
       
       // 5) Top 5 produits
       const topProduits = await pool.query(`
@@ -813,6 +869,16 @@ app.delete('/api/admin/pixels/:id', authenticateToken, async (req, res) => {
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  }
+
+  // Initialisation de la base de données (Migrations simples)
+  try {
+    await pool.query(`
+      ALTER TABLE lignes_commande ADD COLUMN IF NOT EXISTS produit_id INTEGER REFERENCES produits(id);
+    `);
+    console.log("Migration: produit_id ajouté à lignes_commande (si absent)");
+  } catch (err) {
+    console.error("Erreur lors de la migration:", err);
   }
 
   app.listen(PORT, "0.0.0.0", () => {

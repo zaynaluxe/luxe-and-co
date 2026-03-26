@@ -7,6 +7,7 @@ import {
   Activity, Save
 } from 'lucide-react';
 import { formatPrice, API_URL } from '../utils';
+import { toast } from 'sonner';
 
 // --- Types ---
 interface AdminStats {
@@ -285,16 +286,18 @@ export const AdminDashboard: React.FC = () => {
 
   const statusLabels: Record<string, string> = {
     en_attente: 'En attente',
-    confirmée: 'Confirmée',
-    expédiée: 'Expédiée',
-    livrée: 'Livrées'
+    payee: 'Confirmée',
+    expediee: 'Expédiée',
+    livree: 'Livrées',
+    annulee: 'Annulée'
   };
 
   const statusColors: Record<string, string> = {
     en_attente: 'bg-yellow-500',
-    confirmée: 'bg-blue-500',
-    expédiée: 'bg-purple-500',
-    livrée: 'bg-green-500'
+    payee: 'bg-blue-500',
+    expediee: 'bg-purple-500',
+    livree: 'bg-green-500',
+    annulee: 'bg-red-500'
   };
 
   const totalOrders = stats.repartition.reduce((acc, curr) => acc + curr.count, 0);
@@ -567,6 +570,11 @@ export const AdminProducts: React.FC = () => {
     // mais ici on a déjà uploadé via /api/upload, donc on envoie images_urls.
     // On doit s'assurer que le backend accepte images_urls dans les deux cas.
     
+    if (formData.prix_base <= 0) {
+      toast.error('Le prix doit être supérieur à 0');
+      return;
+    }
+
     const payload = {
       ...formData,
       slug: formData.slug || formData.nom.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '')
@@ -610,7 +618,7 @@ export const AdminProducts: React.FC = () => {
       nom: product.nom,
       slug: product.slug,
       description: product.description,
-      prix_base: product.prix_base as number,
+      prix_base: Number(product.prix_base),
       categorie_id: product.categorie_id,
       images_urls: product.images_urls || [product.image_principale_url].filter(Boolean),
       sections: product.sections || [],
@@ -837,6 +845,7 @@ export const AdminProducts: React.FC = () => {
                       <label className="block text-xs uppercase tracking-widest text-gray-400 mb-2">Prix (MAD)</label>
                       <input 
                         type="number" 
+                        min="1"
                         value={formData.prix_base}
                         onChange={e => setFormData({...formData, prix_base: Number(e.target.value)})}
                         className="w-full bg-black border border-gray-800 p-3 text-white focus:border-[#C9A227] outline-none" 
@@ -1592,10 +1601,10 @@ export const AdminOrders: React.FC = () => {
                   </div>
                 </section>
 
-                <section className="bg-black/40 p-4 rounded border border-white/5 space-y-3">
-                  <div className="flex justify-between text-sm font-bold text-[#C9A227] pt-2 border-t border-white/10">
-                    <span>TOTAL TTC</span>
-                    <span>{formatPrice(selectedOrder.total_ttc)}</span>
+                <section className="bg-black/40 p-6 rounded border border-[#C9A227]/30 space-y-4 shadow-[0_0_20px_rgba(201,162,39,0.1)]">
+                  <div className="flex justify-between items-center text-lg font-bold text-[#C9A227]">
+                    <span className="uppercase tracking-widest">TOTAL À PAYER</span>
+                    <span className="text-2xl font-mono">{formatPrice(selectedOrder.total_ttc)}</span>
                   </div>
                 </section>
 
