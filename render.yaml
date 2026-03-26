@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: luxe-co-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: npx tsx server.ts
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: WHATSAPP_PHONE
+        sync: false
+      - key: WHATSAPP_APIKEY
+        sync: false
+      - key: PORT
+        value: 3001
