@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import { v2 as cloudinary } from "cloudinary";
 import fs from "fs";
 import https from "https";
+import http from "http"; // ✅ FIX 1: Ajout du module http pour le keep-alive
 
 const { Pool } = pg;
 
@@ -31,7 +32,7 @@ async function startServer() {
 
   // Middleware
   app.use(cors());
-  app.use(express.json({ limit: "50mb" })); // Pour les uploads d'images en base64
+  app.use(express.json({ limit: "50mb" }));
 
   // Health check route
   app.get("/api/health", (req, res) => {
@@ -46,7 +47,6 @@ async function startServer() {
     },
   });
 
-  // Test database connection
   pool.on('error', (err) => {
     console.error('Unexpected error on idle client', err);
   });
@@ -55,8 +55,7 @@ async function startServer() {
   const initDb = async () => {
     try {
       if (!process.env.DATABASE_URL) return;
-      
-      // Vérifier si la table produits existe
+
       const checkTable = await pool.query(`
         SELECT EXISTS (
           SELECT FROM information_schema.tables 
@@ -72,17 +71,12 @@ async function startServer() {
         await pool.query(schema);
         console.log("Base de données initialisée avec succès.");
       } else {
-        // Migration: Ajouter images_urls si elle n'existe pas
         await pool.query(`
           ALTER TABLE produits ADD COLUMN IF NOT EXISTS images_urls JSONB DEFAULT '[]';
         `);
-
-        // Migration: Ajouter sections si elle n'existe pas
         await pool.query(`
           ALTER TABLE produits ADD COLUMN IF NOT EXISTS sections JSONB DEFAULT '[]';
         `);
-
-        // Migration: Ajouter table pixels
         await pool.query(`
           CREATE TABLE IF NOT EXISTS pixels (
             id SERIAL PRIMARY KEY,
@@ -93,7 +87,6 @@ async function startServer() {
           )
         `);
 
-        // Ajouter un admin par défaut si nécessaire
         const adminEmail = "admin@luxeandco.com";
         const adminPass = await bcrypt.hash("admin123", 10);
         await pool.query(`
@@ -102,7 +95,6 @@ async function startServer() {
           ON CONFLICT (email) DO NOTHING;
         `, [adminEmail, adminPass]);
 
-        // Vérifier si la table categories est vide
         const checkCats = await pool.query("SELECT COUNT(*) FROM categories");
         if (parseInt(checkCats.rows[0].count) === 0) {
           console.log("Seeding categories...");
@@ -202,6 +194,8 @@ async function startServer() {
   app.get("/api/products", async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
+      // ✅ FIX 2: Warm-up connexion Neon avant la vraie requête
+      await pool.query("SELECT 1");
       const limit = parseInt(req.query.limit as string) || 100;
       const result = await pool.query(`
         SELECT 
@@ -242,9 +236,9 @@ async function startServer() {
         LEFT JOIN categories c ON p.categorie_id = c.id 
         WHERE p.slug = $1
       `, [req.params.slug]);
-      
+
       if (productResult.rows.length === 0) return res.status(404).json({ error: "Produit non trouvé." });
-      
+
       const product = productResult.rows[0];
       const variantsResult = await pool.query(`
         SELECT 
@@ -256,7 +250,7 @@ async function startServer() {
         FROM variantes_produits 
         WHERE produit_id = $1
       `, [product.id]);
-      
+
       res.json({ ...product, variantes: variantsResult.rows });
     } catch (err) {
       console.error(err);
@@ -268,7 +262,7 @@ async function startServer() {
     try {
       const productRes = await pool.query("SELECT categorie_id FROM produits WHERE id = $1", [req.params.id]);
       if (productRes.rows.length === 0) return res.status(404).json({ error: "Produit non trouvé." });
-      
+
       const catId = productRes.rows[0].categorie_id;
       const result = await pool.query(`
         SELECT 
@@ -335,7 +329,7 @@ async function startServer() {
     const { nom, description, prix_base, est_actif, est_en_vedette, images_urls, sections, texte_alignement } = req.body;
     try {
       const image_principale_url = images_urls && images_urls.length > 0 ? images_urls[0] : "";
-      
+
       const result = await pool.query(
         "UPDATE produits SET nom = $1, description = $2, prix_base = $3, est_actif = $4, est_en_vedette = $5, image_principale_url = $6, images_urls = $7, sections = $8, texte_alignement = $9 WHERE id = $10 RETURNING *",
         [nom, description, prix_base, est_actif, est_en_vedette, image_principale_url, JSON.stringify(images_urls || []), JSON.stringify(sections || []), texte_alignement || 'left', req.params.id]
@@ -350,7 +344,6 @@ async function startServer() {
   app.delete("/api/products/:id", authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
-      // 1. Récupérer les URLs des images du produit avant suppression
       const productResult = await pool.query(
         "SELECT image_principale_url, images_urls FROM produits WHERE id = $1",
         [id]
@@ -366,15 +359,11 @@ async function startServer() {
         ...(Array.isArray(product.images_urls) ? product.images_urls : [])
       ].filter(Boolean);
 
-      // 2. Supprimer les images de Cloudinary
       for (const url of allUrls) {
         try {
-          // Extraction du public_id : après /upload/vXXXX/ et sans extension
           const parts = url.split('/');
-          const uploadIndex = parts.findIndex(p => p === 'upload');
+          const uploadIndex = parts.findIndex((p: string) => p === 'upload');
           if (uploadIndex !== -1 && parts.length > uploadIndex + 2) {
-            // Le public_id commence après la version (vXXXX)
-            // On prend tout ce qui suit et on enlève l'extension
             const publicIdWithExt = parts.slice(uploadIndex + 2).join('/');
             const publicId = publicIdWithExt.replace(/\.[^/.]+$/, "");
             await cloudinary.uploader.destroy(publicId);
@@ -384,9 +373,7 @@ async function startServer() {
         }
       }
 
-      // 3. Supprimer le produit de la base de données (le CASCADE gère les variantes/avis)
       await pool.query("DELETE FROM produits WHERE id = $1", [id]);
-      
       res.json({ message: "Produit et images supprimés avec succès." });
     } catch (err) {
       console.error("Erreur lors de la suppression complète du produit:", err);
@@ -413,7 +400,6 @@ async function startServer() {
     try {
       await client.query("BEGIN");
 
-      // Calcul des totaux
       let total_ht = 0;
       for (const item of items) {
         let prix = 0;
@@ -491,7 +477,6 @@ async function startServer() {
     try {
       await client.query("BEGIN");
 
-      // Calcul des totaux (simplifié pour commande rapide)
       let total_ht = 0;
       let first_product_name = "Produit";
       for (const item of items) {
@@ -561,14 +546,14 @@ async function startServer() {
       // WhatsApp Notification (CallMeBot) - Background
       const whatsappPhone = process.env.WHATSAPP_PHONE;
       const whatsappApiKey = process.env.WHATSAPP_APIKEY;
-      
+
       if (whatsappPhone && whatsappApiKey) {
         const message = `🛍️ Nouvelle commande LUXE & CO ! Numéro: ${numero_commande} Client: ${nom_complet} Téléphone: ${telephone} Ville: ${ville} Produit: ${first_product_name} Quantité: ${quantite} Total: ${total_ttc} MAD`;
         const encodedMessage = encodeURIComponent(message);
         const url = `https://api.callmebot.com/whatsapp.php?phone=${whatsappPhone.trim()}&text=${encodedMessage}&apikey=${whatsappApiKey.trim()}`;
-        
+
         https.get(url, (res) => {
-          // Background request
+          res.resume();
         }).on('error', (err) => {
           console.error("Erreur notification WhatsApp:", err);
         });
@@ -595,20 +580,11 @@ async function startServer() {
   app.get("/api/admin/stats", authenticateToken, async (req: any, res) => {
     try {
       if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-      
-      // 1) CA du jour
+
       const caJour = await pool.query("SELECT SUM(total_ttc) FROM commandes WHERE DATE(date_commande) = CURRENT_DATE AND statut != 'annulee'");
-      
-      // 2) CA du mois
       const caMois = await pool.query("SELECT SUM(total_ttc) FROM commandes WHERE EXTRACT(MONTH FROM date_commande) = EXTRACT(MONTH FROM CURRENT_DATE) AND statut != 'annulee'");
-      
-      // 3) Commandes en attente
       const attente = await pool.query("SELECT COUNT(*) FROM commandes WHERE statut = 'en_attente'");
-      
-      // 4) Livraisons réussies
       const livrees = await pool.query("SELECT COUNT(*) FROM commandes WHERE statut = 'livree'");
-      
-      // 5) Top 5 produits
       const topProduits = await pool.query(`
         SELECT 
           p.nom, 
@@ -621,8 +597,6 @@ async function startServer() {
         ORDER BY ventes DESC 
         LIMIT 5
       `);
-
-      // 6) Répartition commandes
       const repartition = await pool.query("SELECT statut, COUNT(*) as count FROM commandes GROUP BY statut");
 
       res.json({
@@ -708,7 +682,7 @@ async function startServer() {
     }
   });
 
-  // --- ROUTES PIXELS ---
+  // ✅ FIX 3: Routes pixels — déclaration unique (doublons supprimés)
   app.get("/api/pixels", async (req, res) => {
     try {
       const result = await pool.query("SELECT * FROM pixels WHERE est_actif = true");
@@ -721,9 +695,7 @@ async function startServer() {
   app.post("/api/admin/pixels", authenticateToken, async (req, res) => {
     const { type, pixel_id } = req.body;
     try {
-      // Désactiver l'ancien pixel du même type
       await pool.query("UPDATE pixels SET est_actif = false WHERE type = $1", [type]);
-      // Insérer le nouveau pixel
       const result = await pool.query(
         "INSERT INTO pixels (type, pixel_id, est_actif) VALUES ($1, $2, true) RETURNING *",
         [type, pixel_id]
@@ -743,44 +715,7 @@ async function startServer() {
     }
   });
 
-  // --- ROUTES PIXELS ---
-app.get('/api/pixels', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM pixels WHERE est_actif = TRUE');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: 'Error fetching pixels' });
-  }
-});
-
-app.post('/api/admin/pixels', authenticateToken, async (req, res) => {
-  const { type, pixel_id } = req.body;
-  try {
-    // Deactivate existing pixels of the same type
-    await pool.query('UPDATE pixels SET est_actif = FALSE WHERE type = $1', [type]);
-    
-    // Insert new pixel
-    const result = await pool.query(
-      'INSERT INTO pixels (type, pixel_id, est_actif) VALUES ($1, $2, TRUE) RETURNING *',
-      [type, pixel_id]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Error saving pixel' });
-  }
-});
-
-app.delete('/api/admin/pixels/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  try {
-    await pool.query('DELETE FROM pixels WHERE id = $1', [id]);
-    res.json({ message: 'Pixel deleted' });
-  } catch (err) {
-    res.status(500).json({ error: 'Error deleting pixel' });
-  }
-});
-
-// --- ROUTES ADMIN CLIENTS ---
+  // --- ROUTES ADMIN CLIENTS ---
   app.get("/api/admin/clients", authenticateToken, async (req, res) => {
     try {
       const result = await pool.query("SELECT id, nom, prenom, email, telephone, ville_defaut as ville, date_inscription FROM clients ORDER BY date_inscription DESC");
@@ -873,7 +808,7 @@ app.delete('/api/admin/pixels/:id', authenticateToken, async (req, res) => {
     });
   }
 
-  // Initialisation de la base de données (Migrations simples)
+  // Migration
   try {
     await pool.query(`
       ALTER TABLE lignes_commande ADD COLUMN IF NOT EXISTS produit_id INTEGER REFERENCES produits(id);
@@ -883,16 +818,18 @@ app.delete('/api/admin/pixels/:id', authenticateToken, async (req, res) => {
     console.error("Erreur lors de la migration:", err);
   }
 
-  // ✅ KEEP-ALIVE — Empêche Render de mettre l'application en veille (Free Plan)
+  // ✅ FIX 4: Keep-alive corrigé — utilise http ou https selon l'URL
   const SELF_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   if (process.env.NODE_ENV === "production" || process.env.RENDER_EXTERNAL_URL) {
+    const pingModule = SELF_URL.startsWith("https://") ? https : http;
     setInterval(() => {
-      https.get(`${SELF_URL}/api/health`, (res) => {
+      pingModule.get(`${SELF_URL}/api/health`, (res) => {
         console.log(`✅ Keep-alive ping: ${res.statusCode}`);
+        res.resume(); // Consommer la réponse pour éviter les memory leaks
       }).on('error', (err) => {
         console.error(`❌ Keep-alive error: ${err.message}`);
       });
-    }, 14 * 60 * 1000); // Toutes les 14 minutes (Render s'endort après 15 min)
+    }, 14 * 60 * 1000); // Toutes les 14 minutes
   }
 
   app.listen(PORT, "0.0.0.0", () => {
