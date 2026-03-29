@@ -1661,8 +1661,8 @@ export const AdminPixels: React.FC = () => {
   };
 
   const handleSave = async (type: 'facebook' | 'tiktok', pixelId: string) => {
-    if (type === 'facebook' && pixelId && !/^\d{15}$/.test(pixelId)) {
-      alert('Le Pixel ID Facebook doit contenir exactement 15 chiffres.');
+    if (type === 'facebook' && pixelId && !/^\d{15,16}$/.test(pixelId)) {
+      alert('Le Pixel ID Facebook doit contenir 15 ou 16 chiffres.');
       return;
     }
 
@@ -1735,7 +1735,7 @@ export const AdminPixels: React.FC = () => {
                 type="text" 
                 value={fbPixel}
                 onChange={(e) => setFbPixel(e.target.value)}
-                placeholder="Ex: 123456789012345"
+                placeholder="Ex: 1234567890123456"
                 className="w-full bg-black border border-white/10 p-3 rounded text-sm focus:border-[#C9A227] outline-none transition-colors"
               />
             </div>
