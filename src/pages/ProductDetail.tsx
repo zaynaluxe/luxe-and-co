@@ -100,6 +100,20 @@ const QuickOrderForm: React.FC<{
       });
 
       if (response.ok) {
+        // Facebook Pixel Purchase Event
+        if (typeof window !== 'undefined' && (window as any).fbq) {
+          (window as any).fbq('track', 'Purchase', {
+            content_name: product.nom,
+            content_category: product.categorie,
+            content_ids: [product.id.toString()],
+            content_type: 'product',
+            value: (product.prix_base + (selectedVariante?.prix_supp || 0)) * quantity,
+            currency: 'MAD',
+            num_items: quantity,
+            variant: selectedVariante?.couleur || 'Standard'
+          });
+        }
+
         toast.success('Commande envoyée avec succès ! Notre équipe vous contactera sous peu.');
         setFormData({ nom_complet: '', telephone: '', ville: '' });
         setQuantity(1);
@@ -282,6 +296,18 @@ const ProductDetail: React.FC = () => {
           setMainImage(productData.image_url);
         }
         setLoading(false);
+
+        // Facebook Pixel ViewContent Event
+        if (typeof window !== 'undefined' && (window as any).fbq) {
+          (window as any).fbq('track', 'ViewContent', {
+            content_name: productData.nom,
+            content_category: productData.categorie,
+            content_ids: [productData.id.toString()],
+            content_type: 'product',
+            value: productData.prix_base,
+            currency: 'MAD'
+          });
+        }
       })
       .catch(err => {
         console.error('Error fetching product:', err);
@@ -292,6 +318,18 @@ const ProductDetail: React.FC = () => {
   const handleAddToCart = () => {
     if (!product) return;
     
+    // Facebook Pixel AddToCart Event
+    if (typeof window !== 'undefined' && (window as any).fbq) {
+      (window as any).fbq('track', 'AddToCart', {
+        content_name: product.nom,
+        content_category: product.categorie,
+        content_ids: [product.id.toString()],
+        content_type: 'product',
+        value: (product.prix_base + (selectedVariante?.prix_supp || 0)) * quantity,
+        currency: 'MAD'
+      });
+    }
+
     addToCart({
       id: product.id,
       variante_id: selectedVariante?.id || 0,
